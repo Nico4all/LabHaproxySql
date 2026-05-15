@@ -11,7 +11,7 @@ echo "Iniciando servidor HTTP de health check en puerto $PORT..."
 
 # Loop infinito que escucha conexiones y ejecuta el health check
 while true; do
-    socat TCP-LISTEN:$PORT,reuseaddr,fork EXEC:"$HEALTH_CHECK_SCRIPT" 2>/dev/null
+    socat TCP-LISTEN:$PORT,bind=0.0.0.0,reuseaddr,fork EXEC:"$HEALTH_CHECK_SCRIPT" 2>/dev/null
     
     # Si socat falla, esperar un segundo y reintentar
     sleep 1
