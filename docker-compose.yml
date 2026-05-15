@@ -102,6 +102,35 @@ services:
       retries: 5
       start_period: 30s
 
+  # HAProxy Load Balancer
+  haproxy:
+    image: haproxy:2.8-alpine
+    container_name: haproxy
+    hostname: haproxy
+    ports:
+      - "3307:3307"  # Frontend escritura (master)
+      - "3308:3308"  # Frontend lectura (slaves)
+      - "8080:8080"  # Dashboard estadísticas
+    volumes:
+      - ./haproxy/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+    networks:
+      mysql-network:
+        ipv4_address: 172.20.0.20
+    depends_on:
+      mysql-master:
+        condition: service_healthy
+      mysql-slave1:
+        condition: service_healthy
+      mysql-slave2:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "sh", "-c", "echo 'show info' | nc localhost 8080 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+
 networks:
   mysql-network:
     driver: bridge
