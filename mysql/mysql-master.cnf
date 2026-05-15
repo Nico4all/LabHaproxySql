@@ -1,0 +1,28 @@
+[mysqld]
+# Server ID - será sobrescrito por variable de entorno
+server-id = 1
+
+# Configuración de binlog para replicación
+log-bin = mysql-bin
+binlog_format = ROW
+binlog_expire_logs_seconds = 864000
+
+# GTID Configuration
+gtid_mode = ON
+enforce_gtid_consistency = ON
+
+# Permitir escrituras (maestro)
+read_only = OFF
+super_read_only = OFF
+
+# Replicación
+log_replica_updates = ON
+replica_preserve_commit_order = ON
+
+# Performance
+max_connections = 200
+innodb_buffer_pool_size = 512M
+
+# Seguridad
+skip-name-resolve
+bind-address = 0.0.0.0

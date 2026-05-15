@@ -1,0 +1,13 @@
+service mysqlchk
+{
+    disable         = no
+    flags           = REUSE
+    socket_type     = stream
+    port            = 9200
+    wait            = no
+    user            = root
+    server          = /usr/local/bin/healthcheck.sh
+    log_on_failure  += USERID
+    only_from       = 0.0.0.0/0
+    per_source      = UNLIMITED
+}

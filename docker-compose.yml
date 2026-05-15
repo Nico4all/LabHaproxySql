@@ -1,0 +1,115 @@
+version: '3.8'
+
+services:
+  # MySQL Master
+  mysql-master:
+    build:
+      context: ./mysql
+      dockerfile: Dockerfile
+    container_name: mysql-master
+    hostname: mysql-master
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+      MYSQL_REPLICATION_USER: ${MYSQL_REPLICATION_USER}
+      MYSQL_REPLICATION_PASSWORD: ${MYSQL_REPLICATION_PASSWORD}
+      MYSQL_ROLE: master
+      MYSQL_SERVER_ID: ${SERVER_ID_MASTER}
+    ports:
+      - "${MYSQL_MASTER_PORT}:3306"
+      - "${MASTER_HEALTH_PORT}:9200"
+    volumes:
+      - mysql-master-data:/var/lib/mysql
+    networks:
+      mysql-network:
+        ipv4_address: 172.20.0.10
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-p${MYSQL_ROOT_PASSWORD}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  # MySQL Slave 1
+  mysql-slave1:
+    build:
+      context: ./mysql
+      dockerfile: Dockerfile
+    container_name: mysql-slave1
+    hostname: mysql-slave1
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+      MYSQL_REPLICATION_USER: ${MYSQL_REPLICATION_USER}
+      MYSQL_REPLICATION_PASSWORD: ${MYSQL_REPLICATION_PASSWORD}
+      MYSQL_ROLE: slave
+      MYSQL_SERVER_ID: ${SERVER_ID_SLAVE1}
+      MYSQL_MASTER_HOST: mysql-master
+    ports:
+      - "${MYSQL_SLAVE1_PORT}:3306"
+      - "${SLAVE1_HEALTH_PORT}:9200"
+    volumes:
+      - mysql-slave1-data:/var/lib/mysql
+    networks:
+      mysql-network:
+        ipv4_address: 172.20.0.11
+    depends_on:
+      mysql-master:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-p${MYSQL_ROOT_PASSWORD}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  # MySQL Slave 2
+  mysql-slave2:
+    build:
+      context: ./mysql
+      dockerfile: Dockerfile
+    container_name: mysql-slave2
+    hostname: mysql-slave2
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+      MYSQL_REPLICATION_USER: ${MYSQL_REPLICATION_USER}
+      MYSQL_REPLICATION_PASSWORD: ${MYSQL_REPLICATION_PASSWORD}
+      MYSQL_ROLE: slave
+      MYSQL_SERVER_ID: ${SERVER_ID_SLAVE2}
+      MYSQL_MASTER_HOST: mysql-master
+    ports:
+      - "${MYSQL_SLAVE2_PORT}:3306"
+      - "${SLAVE2_HEALTH_PORT}:9200"
+    volumes:
+      - mysql-slave2-data:/var/lib/mysql
+    networks:
+      mysql-network:
+        ipv4_address: 172.20.0.12
+    depends_on:
+      mysql-master:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-p${MYSQL_ROOT_PASSWORD}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+networks:
+  mysql-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
+
+volumes:
+  mysql-master-data:
+  mysql-slave1-data:
+  mysql-slave2-data:
