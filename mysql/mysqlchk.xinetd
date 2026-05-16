@@ -1,8 +1,10 @@
 service mysqlchk
 {
+    type            = UNLISTED
     disable         = no
     flags           = REUSE
     socket_type     = stream
+    protocol        = tcp
     port            = 9200
     wait            = no
     user            = root

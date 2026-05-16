@@ -23,12 +23,12 @@ else
     rm -f /etc/mysql/conf.d/mysql-master.cnf
 fi
 
-# Función para iniciar el servidor HTTP de health check en background
+# Función para iniciar el servidor xinetd de health check en background
 start_health_server() {
-    echo "Iniciando servidor HTTP para health checks..."
-    /usr/local/bin/health-server.sh &
-    HEALTH_SERVER_PID=$!
-    echo "Servidor HTTP iniciado con PID: $HEALTH_SERVER_PID"
+    echo "Iniciando xinetd para health checks..."
+    xinetd -dontfork &
+    XINETD_PID=$!
+    echo "xinetd iniciado con PID: $XINETD_PID"
 }
 
 # Función para configurar replicación en esclavos

@@ -98,17 +98,11 @@ echo -e "${YELLOW}→${NC} Configurando replicación en esclavos..."
 
 docker exec -i mysql-slave1 mysql -uroot -p${MYSQL_ROOT_PASSWORD} << EOF 2>/dev/null
 STOP REPLICA;
-SET GTID_NEXT='${MASTER_UUID}:7';
-BEGIN; COMMIT;
-SET GTID_NEXT='AUTOMATIC';
 START REPLICA;
 EOF
 
 docker exec -i mysql-slave2 mysql -uroot -p${MYSQL_ROOT_PASSWORD} << EOF 2>/dev/null
 STOP REPLICA;
-SET GTID_NEXT='${MASTER_UUID}:7';
-BEGIN; COMMIT;
-SET GTID_NEXT='AUTOMATIC';
 START REPLICA;
 EOF
 
