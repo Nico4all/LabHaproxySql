@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   # MySQL Master
   mysql-master:
@@ -41,9 +39,6 @@ services:
     hostname: mysql-slave1
     environment:
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
-      MYSQL_DATABASE: ${MYSQL_DATABASE}
-      MYSQL_USER: ${MYSQL_USER}
-      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
       MYSQL_REPLICATION_USER: ${MYSQL_REPLICATION_USER}
       MYSQL_REPLICATION_PASSWORD: ${MYSQL_REPLICATION_PASSWORD}
       MYSQL_ROLE: slave
@@ -76,9 +71,6 @@ services:
     hostname: mysql-slave2
     environment:
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
-      MYSQL_DATABASE: ${MYSQL_DATABASE}
-      MYSQL_USER: ${MYSQL_USER}
-      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
       MYSQL_REPLICATION_USER: ${MYSQL_REPLICATION_USER}
       MYSQL_REPLICATION_PASSWORD: ${MYSQL_REPLICATION_PASSWORD}
       MYSQL_ROLE: slave
@@ -104,7 +96,7 @@ services:
 
   # HAProxy Load Balancer
   haproxy:
-    image: haproxy:2.8-alpine
+    image: haproxy:2.6-alpine
     container_name: haproxy
     hostname: haproxy
     ports:
@@ -130,6 +122,20 @@ services:
       retries: 3
       start_period: 10s
     restart: unless-stopped
+
+  sysbench:
+    build:
+      context: ./sysbench
+      dockerfile: Dockerfile
+    container_name: sysbench
+    hostname: sysbench
+    networks:
+      mysql-network:
+        ipv4_address: 172.20.0.30
+    depends_on:
+      - haproxy
+    env_file:
+      - .env
 
 networks:
   mysql-network:

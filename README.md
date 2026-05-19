@@ -1,446 +1,951 @@
-# MySQL Load Balancer con HAProxy - Parte 1: Replicación MySQL
+# Proyecto 5: Balanceo de carga de bases de datos MySQL con HAProxy
 
-Este proyecto implementa un balanceador de carga para bases de datos MySQL usando HAProxy con replicación maestro-esclavo y GTID.
+## 1. Información general
 
-##  Contenido
+Este proyecto implementa una arquitectura de base de datos MySQL con replicación maestro-esclavo y balanceo de carga mediante HAProxy. El tráfico de escritura se dirige únicamente al nodo maestro y el tráfico de lectura se distribuye entre los nodos esclavos.
 
-- [Arquitectura](#arquitectura)
-- [Requisitos](#requisitos)
-- [Instalación y Configuración](#instalación-y-configuración)
-- [Parte 1: MySQL con Replicación](#parte-1-mysql-con-replicación)
-- [Verificación y Pruebas](#verificación-y-pruebas)
-- [Solución de Problemas](#solución-de-problemas)
+El sistema está completamente contenerizado con Docker y orquestado con Docker Compose.
 
-## 🏗️ Arquitectura
+---
 
+## 2. Objetivo del proyecto
+
+Implementar un balanceador de carga para bases de datos MySQL utilizando HAProxy en modo TCP, con replicación basada en GTID y health checks personalizados expuestos mediante xinetd.
+
+El sistema debe permitir:
+
+- Separar tráfico de escritura y lectura.
+- Enviar escrituras únicamente al nodo maestro.
+- Distribuir lecturas entre los nodos esclavos.
+- Detectar automáticamente nodos caídos o no saludables.
+- Visualizar el estado de los backends desde el dashboard de HAProxy.
+- Ejecutar pruebas de rendimiento con Sysbench.
+
+---
+
+## 3. Herramientas utilizadas
+
+| Herramienta | Versión / uso |
+|---|---|
+| MySQL | MySQL 8 bookworm|
+| HAProxy | HAProxy 2.6 |
+| xinetd | Publicación de health checks HTTP |
+| Docker | Contenerización |
+| Docker Compose | Orquestación de servicios |
+| Sysbench | Pruebas de rendimiento |
+| Vagrant | Entorno de laboratorio opcional |
+
+---
+
+## 4. Arquitectura general
+
+```text
+Cliente / Aplicación
+        |
+        |--------------------------|
+        |                          |
+        v                          v
+ Puerto 3307                  Puerto 3308
+ Escritura                    Lectura
+        |                          |
+        v                          v
+      HAProxy ---------------- HAProxy
+        |                          |
+        v                          v
+ MySQL Master              MySQL Slave 1
+ Escritura                 Lectura
+        |
+        | Replicación GTID
+        v
+ MySQL Slave 2
+ Lectura
 ```
-┌─────────────────────────────────────────────────────────┐
-│                    Vagrant VM                            │
-│  ┌───────────────────────────────────────────────────┐  │
-│  │              Docker Network                        │  │
-│  │  ┌─────────────────┐                              │  │
-│  │  │  MySQL Master   │  (puerto 3306)               │  │
-│  │  │  Server ID: 1   │  Health Check: 9200          │  │
-│  │  │  read_only=OFF  │                              │  │
-│  │  └────────┬────────┘                              │  │
-│  │           │                                        │  │
-│  │           │ Replicación GTID                      │  │
-│  │           │                                        │  │
-│  │     ┌─────┴─────┐                                 │  │
-│  │     │           │                                 │  │
-│  │  ┌──▼───────┐ ┌─▼──────────┐                     │  │
-│  │  │ Slave 1  │ │  Slave 2   │                     │  │
-│  │  │Server:2  │ │ Server:3   │                     │  │
-│  │  │read_only │ │ read_only  │                     │  │
-│  │  │  :3316   │ │   :3326    │                     │  │
-│  │  │  HC:9201 │ │  HC:9202   │                     │  │
-│  │  └──────────┘ └────────────┘                     │  │
-│  └───────────────────────────────────────────────────┘  │
-└─────────────────────────────────────────────────────────┘
+
+---
+
+## 5. Servicios del proyecto
+
+| Servicio | Función | Puerto interno | Puerto en host |
+|---|---|---:|---:|
+| mysql-master | Nodo maestro MySQL | 3306 | 3306 |
+| mysql-slave1 | Primer nodo esclavo | 3306 | 3316 |
+| mysql-slave2 | Segundo nodo esclavo | 3306 | 3326 |
+| haproxy | Balanceador de carga | 3307 / 3308 / 8080 | 3307 / 3308 / 8080 |
+| sysbench | Pruebas de rendimiento | N/A | N/A |
+
+---
+
+## 6. Puertos principales
+
+| Puerto | Uso |
+|---:|---|
+| 3306 | MySQL maestro desde el host |
+| 3316 | MySQL esclavo 1 desde el host |
+| 3326 | MySQL esclavo 2 desde el host |
+| 3307 | Entrada HAProxy para escrituras |
+| 3308 | Entrada HAProxy para lecturas |
+| 8080 | Dashboard web de HAProxy |
+| 9200 | Health check del maestro desde el host |
+| 9201 | Health check del esclavo 1 desde el host |
+| 9202 | Health check del esclavo 2 desde el host |
+
+Dentro de la red Docker, cada contenedor MySQL expone su health check en el puerto interno `9200`. Por eso HAProxy consulta:
+
+```text
+mysql-master:9200
+mysql-slave1:9200
+mysql-slave2:9200
 ```
 
-### Características Implementadas en Parte 1:
+Aunque en el host se publiquen como `9200`, `9201` y `9202` para evitar conflicto de puertos.
 
-- ✅ 1 servidor MySQL maestro (escritura)
-- ✅ 2 servidores MySQL esclavos (lectura)
-- ✅ Replicación basada en GTID
-- ✅ Health checks HTTP personalizados con xinetd
-- ✅ Scripts de verificación y pruebas
+---
 
-## Requisitos
+## 7. Estructura del proyecto
 
-- VirtualBox >= 6.1
-- Vagrant >= 2.3.0
-- 4 GB RAM disponibles
-- 10 GB espacio en disco
+```text
+LabHaproxySql-main/
+│
+├── .env
+├── docker-compose.yml
+├── Vagrantfile
+├── leeme.md
+│
+├── haproxy/
+│   └── haproxy.cfg
+│
+├── mysql/
+│   ├── Dockerfile
+│   ├── docker-entrypoint.sh
+│   ├── healthcheck.sh
+│   ├── mysql-master.cnf
+│   ├── mysql-slave.cnf
+│   └── mysqlchk.xinetd
+│
+├── sysbench/
+│   └── Dockerfile
+│
+└── scripts/
+    ├── quick-start.sh
+    ├── quick-start-haproxy.sh
+    ├── verify-healthchecks.sh
+    ├── verify-replication.sh
+    ├── verify-haproxy.sh
+    ├── test-replication.sh
+    ├── test-haproxy-balancing.sh
+    ├── test-failover-slave.sh
+    ├── sysbench-prepare.sh
+    ├── sysbench-read.sh
+    ├── sysbench-write.sh
+    └── sysbench-cleanup.sh
+```
 
-## Instalación y Configuración
+---
 
-### Paso 1: Clonar/Crear el Proyecto
+## 8. Variables de entorno
+
+El proyecto utiliza un archivo `.env` para centralizar usuarios, contraseñas y puertos.
+
+Ejemplo:
+
+```env
+# Configuración de MySQL
+MYSQL_ROOT_PASSWORD=rootpass123
+MYSQL_REPLICATION_USER=replicator
+MYSQL_REPLICATION_PASSWORD=replicatorpass123
+MYSQL_DATABASE=testdb
+MYSQL_USER=appuser
+MYSQL_PASSWORD=apppass123
+
+# Puertos MySQL publicados en el host
+MYSQL_MASTER_PORT=3306
+MYSQL_SLAVE1_PORT=3316
+MYSQL_SLAVE2_PORT=3326
+
+# Puertos de health check publicados en el host
+MASTER_HEALTH_PORT=9200
+SLAVE1_HEALTH_PORT=9201
+SLAVE2_HEALTH_PORT=9202
+
+# Configuración de HAProxy
+HAPROXY_WRITE_PORT=3307
+HAPROXY_READ_PORT=3308
+HAPROXY_STATS_PORT=8080
+HAPROXY_STATS_USER=admin
+HAPROXY_STATS_PASSWORD=admin123
+
+# Server IDs para replicación
+SERVER_ID_MASTER=1
+SERVER_ID_SLAVE1=2
+SERVER_ID_SLAVE2=3
+```
+
+---
+
+## 9. Requisitos previos
+
+Antes de ejecutar el proyecto, la máquina debe tener instalado:
+
+- Docker
+- Docker Compose
+- Git, opcional
+- Vagrant, opcional si se usa la máquina virtual del laboratorio
+
+Verificar instalación:
 
 ```bash
-# Crear directorio del proyecto
-mkdir mysql-haproxy-loadbalancer
-cd mysql-haproxy-loadbalancer
-
-# Estructura de carpetas ya creada:
-# .
-# ├── Vagrantfile
-# ├── .env
-# ├── docker-compose.yml
-# ├── mysql/
-# │   ├── Dockerfile
-# │   ├── healthcheck.sh
-# │   ├── mysqlchk.xinetd
-# │   ├── docker-entrypoint.sh
-# │   ├── mysql-master.cnf
-# │   └── mysql-slave.cnf
-# └── scripts/
-#     ├── verify-replication.sh
-#     ├── verify-healthchecks.sh
-#     └── test-replication.sh
+docker --version
+docker compose version
 ```
 
-### Paso 2: Iniciar la Máquina Virtual
+---
+
+## 10. Construcción y ejecución del proyecto
+
+### 10.1. Levantar el proyecto desde cero
 
 ```bash
-# Iniciar y provisionar la VM
-vagrant up
-
-# Esto tomará varios minutos la primera vez
-# Instalará: Ubuntu 22.04, Docker, Docker Compose, MySQL Client
+docker compose down -v
+docker compose build --no-cache
+docker compose up -d
 ```
 
-### Paso 3: Conectarse a la VM
+### 10.2. Verificar contenedores
 
 ```bash
-# SSH a la máquina virtual
-vagrant ssh
-
-# Navegar al directorio del proyecto
-cd /vagrant
+docker compose ps
 ```
 
-## Parte 1: MySQL con Replicación
+Resultado esperado:
 
-### Paso 1: Construir y Levantar los Contenedores
+```text
+mysql-master    running
+mysql-slave1    running
+mysql-slave2    running
+haproxy         running
+sysbench        running
+```
+
+---
+
+## 11. Funcionamiento de MySQL
+
+El proyecto usa tres instancias MySQL:
+
+- `mysql-master`: nodo principal, recibe escrituras.
+- `mysql-slave1`: nodo esclavo, recibe lecturas.
+- `mysql-slave2`: nodo esclavo, recibe lecturas.
+
+La replicación se realiza con GTID-based replication, usando:
+
+```sql
+SOURCE_AUTO_POSITION = 1
+```
+
+Esto permite que los esclavos repliquen automáticamente desde el maestro sin depender de posiciones manuales de binlog.
+
+---
+
+## 12. Configuración del maestro
+
+El nodo maestro se configura con:
+
+- `server-id = 1`
+- `log-bin` habilitado
+- `gtid_mode = ON`
+- `enforce_gtid_consistency = ON`
+- `read_only = OFF`
+
+El maestro crea el usuario de replicación:
+
+```sql
+CREATE USER IF NOT EXISTS 'replicator'@'%'
+IDENTIFIED WITH mysql_native_password BY 'replicatorpass123';
+
+GRANT REPLICATION SLAVE ON *.* TO 'replicator'@'%';
+FLUSH PRIVILEGES;
+```
+
+---
+
+## 13. Configuración de esclavos
+
+Los esclavos se configuran con:
+
+- `server-id = 2` para `mysql-slave1`
+- `server-id = 3` para `mysql-slave2`
+- `gtid_mode = ON`
+- `enforce_gtid_consistency = ON`
+- `read_only = ON`
+- `super_read_only = ON`
+
+Cada esclavo se conecta al maestro con:
+
+```sql
+CHANGE REPLICATION SOURCE TO
+    SOURCE_HOST='mysql-master',
+    SOURCE_PORT=3306,
+    SOURCE_USER='replicator',
+    SOURCE_PASSWORD='replicatorpass123',
+    SOURCE_AUTO_POSITION=1;
+
+START REPLICA;
+```
+
+---
+
+## 14. Health checks con xinetd
+
+Cada nodo MySQL ejecuta un health check expuesto mediante xinetd.
+
+El servicio xinetd escucha internamente en:
+
+```text
+9200
+```
+
+Cada contenedor MySQL tiene su propio puerto interno `9200`, por lo que no hay conflicto dentro de la red Docker.
+
+En el host se publican así:
+
+| Nodo | Puerto interno | Puerto host |
+|---|---:|---:|
+| mysql-master | 9200 | 9200 |
+| mysql-slave1 | 9200 | 9201 |
+| mysql-slave2 | 9200 | 9202 |
+
+---
+
+## 15. Validación manual de health checks
+
+Desde el host:
 
 ```bash
-# Dentro de la VM (/vagrant)
-
-# Construir las imágenes personalizadas de MySQL
-docker-compose build
-
-# Levantar los contenedores
-docker-compose up -d
-
-# Verificar que los contenedores estén corriendo
-docker-compose ps
-```
-
-**Salida esperada:**
-```
-NAME            IMAGE                     STATUS         PORTS
-mysql-master    mysql-haproxy_mysql-master   Up 2 minutes   0.0.0.0:3306->3306/tcp, 0.0.0.0:9200->9200/tcp
-mysql-slave1    mysql-haproxy_mysql-slave1   Up 2 minutes   0.0.0.0:3316->3306/tcp, 0.0.0.0:9201->9200/tcp
-mysql-slave2    mysql-haproxy_mysql-slave2   Up 2 minutes   0.0.0.0:3326->3306/tcp, 0.0.0.0:9202->9200/tcp
-```
-
-### Paso 2: Verificar Logs de Inicialización
-
-```bash
-# Ver logs del maestro
-docker-compose logs mysql-master
-
-# Buscar estas líneas clave:
-# - "MySQL está listo"
-# - "Usuario de replicación creado"
-# - "xinetd iniciado con PID"
-# - "Inicialización completa"
-
-# Ver logs de los esclavos
-docker-compose logs mysql-slave1
-docker-compose logs mysql-slave2
-
-# Buscar estas líneas clave:
-# - "Maestro MySQL está listo"
-# - "Replicación configurada exitosamente"
-# - "Inicialización completa"
-```
-
-### Paso 3: Verificar el Estado de la Replicación
-
-```bash
-# Ejecutar script de verificación
-chmod +x scripts/verify-replication.sh
-./scripts/verify-replication.sh
-```
-
-**Salida esperada:**
-
-```
-======================================
-Verificando Estado de Replicación MySQL
-======================================
-
---- MySQL Master ---
-Host: mysql-master:3306
-✓ Conexión exitosa
-✓ Rol: MAESTRO (read_only=OFF)
-
-Usuarios de replicación:
-+-------------+------+
-| user        | host |
-+-------------+------+
-| replicator  | %    |
-+-------------+------+
-
-Estado del binlog:
-+------------------+----------+--------------+------------------+
-| File             | Position | Binlog_Do_DB | Binlog_Ignore_DB |
-+------------------+----------+--------------+------------------+
-| mysql-bin.000003 |      157 |              |                  |
-+------------------+----------+--------------+------------------+
-
---------------------------------------
-
---- MySQL Slave 1 ---
-Host: mysql-slave1:3316
-✓ Conexión exitosa
-✓ Rol: ESCLAVO (read_only=ON)
-
-Estado de replicación:
-             Master_Host: mysql-master
-     Replica_IO_Running: Yes
-    Replica_SQL_Running: Yes
-      Seconds_Behind_Master: 0
-           Auto_Position: 1
-
---------------------------------------
-
---- MySQL Slave 2 ---
-Host: mysql-slave2:3326
-✓ Conexión exitosa
-✓ Rol: ESCLAVO (read_only=ON)
-
-Estado de replicación:
-             Master_Host: mysql-master
-     Replica_IO_Running: Yes
-    Replica_SQL_Running: Yes
-      Seconds_Behind_Master: 0
-           Auto_Position: 1
-
-======================================
-```
-
-**✅ Puntos clave a verificar:**
-- Replica_IO_Running: **Yes**
-- Replica_SQL_Running: **Yes**
-- Seconds_Behind_Master: **0** (o muy bajo)
-- Auto_Position: **1** (GTID habilitado)
-
-### Paso 4: Verificar Health Checks HTTP
-
-```bash
-# Ejecutar script de verificación de health checks
-chmod +x scripts/verify-healthchecks.sh
-./scripts/verify-healthchecks.sh
-```
-
-**Salida esperada:**
-
-```
-======================================
-Verificando Health Checks HTTP
-======================================
-
---- MySQL Master (Puerto 9200) ---
-✓ Health Check: OK (HTTP 200)
-Respuesta: OK
-
---- MySQL Slave 1 (Puerto 9201) ---
-✓ Health Check: OK (HTTP 200)
-Respuesta: OK
-
---- MySQL Slave 2 (Puerto 9202) ---
-✓ Health Check: OK (HTTP 200)
-Respuesta: OK
-
-======================================
-```
-
-**También puedes verificar manualmente:**
-
-```bash
-# Desde la VM
-curl -i http://localhost:9200  # Master
-curl -i http://localhost:9201  # Slave 1
-curl -i http://localhost:9202  # Slave 2
-
-# Desde tu máquina host (fuera de la VM)
 curl -i http://localhost:9200
 curl -i http://localhost:9201
 curl -i http://localhost:9202
 ```
 
-### Paso 5: Prueba de Escritura y Lectura
+Resultado esperado para el maestro:
+
+```text
+HTTP/1.1 200 OK
+Content-Type: text/plain
+Connection: close
+
+OK - Master is writable
+```
+
+Resultado esperado para los esclavos:
+
+```text
+HTTP/1.1 200 OK
+Content-Type: text/plain
+Connection: close
+
+OK - Slave replication healthy. Lag=0
+```
+
+Desde el contenedor HAProxy:
 
 ```bash
-# Ejecutar script de prueba
-chmod +x scripts/test-replication.sh
-./scripts/test-replication.sh
+docker exec -it haproxy sh
+wget -S -O- http://mysql-master:9200
+wget -S -O- http://mysql-slave1:9200
+wget -S -O- http://mysql-slave2:9200
+exit
 ```
 
-**Salida esperada:**
+---
 
-```
-======================================
-Prueba de Escritura/Lectura
-======================================
+## 16. Configuración de HAProxy
 
-1. Creando tabla de prueba en el MAESTRO...
-✓ Tabla creada
+HAProxy tiene dos frontends principales:
 
-2. Insertando datos en el MAESTRO...
-   Insertado registro #1
-   Insertado registro #2
-   Insertado registro #3
-   Insertado registro #4
-   Insertado registro #5
-✓ Datos insertados
+| Frontend | Puerto | Uso | Backend |
+|---|---:|---|---|
+| mysql_write | 3307 | Escrituras | mysql_master_backend |
+| mysql_read | 3308 | Lecturas | mysql_slaves_backend |
 
-3. Esperando replicación (5 segundos)...
+---
 
-4. Verificando datos en el MAESTRO...
-+------------------+
-| total_registros  |
-+------------------+
-|                5 |
-+------------------+
+## 17. Backend de escritura
 
-5. Verificando datos en ESCLAVO 1...
-+------------------+
-| total_registros  |
-+------------------+
-|                5 |
-+------------------+
+El backend de escritura envía todo el tráfico al maestro.
 
-6. Verificando datos en ESCLAVO 2...
-+------------------+
-| total_registros  |
-+------------------+
-|                5 |
-+------------------+
+Ejemplo recomendado:
 
-7. Intentando escribir en ESCLAVO 1 (debe fallar por read_only)...
-✓ Correctamente bloqueado por read_only
-
-======================================
+```cfg
+backend mysql_master_backend
+    mode tcp
+    option tcp-check
+    tcp-check connect port 9200
+    tcp-check send GET\ /\ HTTP/1.0\r\n\r\n
+    tcp-check expect string OK
+    server mysql-master mysql-master:3306 check inter 3s fall 3 rise 2
 ```
 
-## Verificación Manual Adicional
+---
 
-### Conectarse Directamente a MySQL
+## 18. Backend de lectura
+
+El backend de lectura distribuye tráfico entre los esclavos.
+
+Ejemplo recomendado:
+
+```cfg
+backend mysql_slaves_backend
+    mode tcp
+    balance roundrobin
+    option tcp-check
+    tcp-check connect port 9200
+    tcp-check send GET\ /\ HTTP/1.0\r\n\r\n
+    tcp-check expect string OK
+    server mysql-slave1 mysql-slave1:3306 check inter 3s fall 3 rise 2
+    server mysql-slave2 mysql-slave2:3306 check inter 3s fall 3 rise 2
+```
+
+Se utiliza `tcp-check` porque HAProxy trabaja en modo TCP y el health check expuesto por xinetd responde HTTP simple. El chequeo valida que la respuesta contenga la palabra `OK`.
+
+---
+
+## 19. Dashboard de HAProxy
+
+El dashboard está disponible en:
+
+```text
+http://localhost:8080/stats
+```
+
+Credenciales:
+
+```text
+Usuario: admin
+Contraseña: admin123
+```
+
+En el dashboard se deben observar:
+
+- `mysql-master` en estado `UP`.
+- `mysql-slave1` en estado `UP`.
+- `mysql-slave2` en estado `UP`.
+- Frontend de escritura abierto en el puerto `3307`.
+- Frontend de lectura abierto en el puerto `3308`.
+
+---
+
+## 20. Verificación de HAProxy por consola
 
 ```bash
-# Conectar al maestro
-docker exec -it mysql-master mysql -uroot -prootpass123
-
-# Dentro de MySQL:
-mysql> SHOW MASTER STATUS;
-mysql> SELECT @@server_id, @@read_only;
-mysql> SHOW DATABASES;
-mysql> USE testdb;
-mysql> SHOW TABLES;
+curl -s -u admin:admin123 "http://localhost:8080/stats;csv" | grep mysql
 ```
+
+También se puede ejecutar:
 
 ```bash
-# Conectar a un esclavo
-docker exec -it mysql-slave1 mysql -uroot -prootpass123
-
-# Dentro de MySQL:
-mysql> SHOW REPLICA STATUS\G
-mysql> SELECT @@server_id, @@read_only;
+./scripts/verify-haproxy.sh
 ```
 
-### Verificar GTID
+Resultado esperado:
+
+```text
+Backend: mysql_master_backend
+  ✓ mysql-master: UP
+
+Backend: mysql_slaves_backend
+  ✓ mysql-slave1: UP
+  ✓ mysql-slave2: UP
+```
+
+---
+
+## 21. Verificación de replicación
+
+Ejecutar:
 
 ```bash
-# En el maestro
-docker exec -it mysql-master mysql -uroot -prootpass123 -e "SELECT @@GLOBAL.gtid_executed;"
-
-# En los esclavos
-docker exec -it mysql-slave1 mysql -uroot -prootpass123 -e "SELECT @@GLOBAL.gtid_executed;"
-docker exec -it mysql-slave2 mysql -uroot -prootpass123 -e "SELECT @@GLOBAL.gtid_executed;"
-
-# Los GTIDs deben coincidir
+./scripts/verify-replication.sh
 ```
 
-## Solución de Problemas
-
-### Los contenedores no inician
+También se puede revisar manualmente:
 
 ```bash
-# Ver logs detallados
-docker-compose logs -f
-
-# Reconstruir desde cero
-docker-compose down -v
-docker-compose build --no-cache
-docker-compose up -d
+docker exec -it mysql-slave1 mysql -uroot -p
+SHOW REPLICA STATUS\G
 ```
 
-### La replicación no funciona
+El resultado esperado debe incluir:
+
+```text
+Replica_IO_Running: Yes
+Replica_SQL_Running: Yes
+Seconds_Behind_Source: 0
+Auto_Position: 1
+```
+
+Repetir en `mysql-slave2`:
 
 ```bash
-# Ver el estado completo de la replicación
-docker exec -it mysql-slave1 mysql -uroot -prootpass123 -e "SHOW REPLICA STATUS\G"
-
-# Buscar errores específicos en:
-# - Last_IO_Error
-# - Last_SQL_Error
-
-# Reiniciar replicación manualmente
-docker exec -it mysql-slave1 mysql -uroot -prootpass123 -e "STOP REPLICA; START REPLICA;"
+docker exec -it mysql-slave2 mysql -uroot -p
+SHOW REPLICA STATUS\G
 ```
 
-### Health check devuelve 503
+---
+
+## 22. Prueba de separación de tráfico
+
+El sistema debe demostrar:
+
+- Escrituras por el puerto `3307`.
+- Lecturas por el puerto `3308`.
+- El puerto de lectura no debe aceptar escrituras porque los esclavos están en modo `read_only` y `super_read_only`.
+
+Ejecutar:
 
 ```bash
-# Verificar que xinetd esté corriendo
-docker exec -it mysql-master ps aux | grep xinetd
-
-# Ver logs de xinetd
-docker exec -it mysql-master tail -f /var/log/syslog
-
-# Probar el script manualmente
-docker exec -it mysql-master /usr/local/bin/healthcheck.sh
+./scripts/test-haproxy-balancing.sh
 ```
 
-### Lag de replicación alto
+Prueba manual de escritura:
 
 ```bash
-# Verificar el lag
-docker exec -it mysql-slave1 mysql -uroot -prootpass123 -e "SHOW REPLICA STATUS\G" | grep Seconds_Behind
-
-# Si es alto (>30s), el health check devolverá 503
-# Causas comunes:
-# - Mucha carga en el maestro
-# - Recursos insuficientes
-# - Red lenta
+mysql -h 127.0.0.1 -P 3307 -uappuser -papppass123 testdb
 ```
 
-## Comandos Útiles
+Dentro de MySQL:
+
+```sql
+CREATE TABLE IF NOT EXISTS prueba_lb (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    mensaje VARCHAR(100),
+    creado TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+INSERT INTO prueba_lb (mensaje) VALUES ('Prueba escritura por HAProxy puerto 3307');
+SELECT * FROM prueba_lb;
+```
+
+Prueba manual de lectura:
 
 ```bash
-# Ver todos los contenedores
-docker-compose ps
-
-# Ver logs en tiempo real
-docker-compose logs -f
-
-# Detener todos los servicios
-docker-compose down
-
-# Detener y eliminar volúmenes (CUIDADO: borra todos los datos)
-docker-compose down -v
-
-# Reiniciar un servicio específico
-docker-compose restart mysql-slave1
-
-# Ver uso de recursos
-docker stats
-
-# Entrar a un contenedor
-docker exec -it mysql-master bash
+mysql -h 127.0.0.1 -P 3308 -uappuser -papppass123 testdb
 ```
 
+Dentro de MySQL:
 
+```sql
+SELECT * FROM prueba_lb;
+```
 
-## Notas Importantes
+---
 
-1. **Contraseñas**: Las contraseñas están en el archivo `.env`.
-2. **Persistencia**: Los datos se almacenan en volúmenes Docker. Se mantienen entre reinicios.
-3. **Puertos**: Verificar que los puertos no estén en uso antes de iniciar.
-4. **Recursos**: La VM necesita al menos 4 GB RAM para funcionar bien.
+## 23. Prueba de caída de un esclavo
 
+Para demostrar detección automática de fallos:
+
+```bash
+docker compose stop mysql-slave1
+```
+
+Esperar unos segundos y revisar dashboard:
+
+```bash
+curl -s -u admin:admin123 "http://localhost:8080/stats;csv" | grep mysql-slave1
+```
+
+Resultado esperado:
+
+```text
+mysql-slave1 DOWN
+```
+
+Luego levantar nuevamente:
+
+```bash
+docker compose start mysql-slave1
+```
+
+Esperar y revisar:
+
+```bash
+curl -s -u admin:admin123 "http://localhost:8080/stats;csv" | grep mysql-slave1
+```
+
+Resultado esperado:
+
+```text
+mysql-slave1 UP
+```
+
+Si existe el script, usar:
+
+```bash
+./scripts/test-failover-slave.sh
+```
+
+---
+
+## 24. Pruebas con Sysbench
+
+Sysbench se utiliza para realizar benchmarks de lectura y escritura.
+
+### 24.1. Preparar datos de prueba
+
+```bash
+./scripts/sysbench-prepare.sh
+```
+
+Comando equivalente:
+
+```bash
+docker exec -it sysbench sysbench oltp_read_write \
+  --db-driver=mysql \
+  --mysql-host=haproxy \
+  --mysql-port=3307 \
+  --mysql-user=appuser \
+  --mysql-password=apppass123 \
+  --mysql-db=testdb \
+  --tables=4 \
+  --table-size=10000 \
+  prepare
+```
+
+---
+
+### 24.2. Benchmark de lectura
+
+Requisito del proyecto:
+
+- 8 hilos
+- modo read-only
+- puerto 3308
+- duración 60 segundos
+
+Ejecutar:
+
+```bash
+./scripts/sysbench-read.sh
+```
+
+Comando equivalente:
+
+```bash
+docker exec -it sysbench sysbench oltp_read_only \
+  --db-driver=mysql \
+  --mysql-host=haproxy \
+  --mysql-port=3308 \
+  --mysql-user=appuser \
+  --mysql-password=apppass123 \
+  --mysql-db=testdb \
+  --tables=4 \
+  --table-size=10000 \
+  --threads=8 \
+  --time=60 \
+  --report-interval=10 \
+  run
+```
+
+---
+
+### 24.3. Benchmark de escritura / lectura-escritura
+
+Requisito del proyecto:
+
+- 8 hilos
+- modo read/write
+- puerto 3307
+- duración 60 segundos
+
+Ejecutar:
+
+```bash
+./scripts/sysbench-write.sh
+```
+
+Comando equivalente:
+
+```bash
+docker exec -it sysbench sysbench oltp_read_write \
+  --db-driver=mysql \
+  --mysql-host=haproxy \
+  --mysql-port=3307 \
+  --mysql-user=appuser \
+  --mysql-password=apppass123 \
+  --mysql-db=testdb \
+  --tables=4 \
+  --table-size=10000 \
+  --threads=8 \
+  --time=60 \
+  --report-interval=10 \
+  run
+```
+
+---
+
+### 24.4. Limpiar datos de Sysbench
+
+```bash
+./scripts/sysbench-cleanup.sh
+```
+
+Comando equivalente:
+
+```bash
+docker exec -it sysbench sysbench oltp_read_write \
+  --db-driver=mysql \
+  --mysql-host=haproxy \
+  --mysql-port=3307 \
+  --mysql-user=appuser \
+  --mysql-password=apppass123 \
+  --mysql-db=testdb \
+  --tables=4 \
+  cleanup
+```
+
+---
+
+## 25. Evidencias esperadas para la entrega
+
+Agregar capturas o resultados de consola de las siguientes pruebas:
+
+### 25.1. Dashboard HAProxy
+
+Captura esperada:
+
+- `mysql-master` en `UP`.
+- `mysql-slave1` en `UP`.
+- `mysql-slave2` en `UP`.
+
+Ubicación sugerida:
+
+```text
+evidencias/dashboard-haproxy-up.png
+```
+
+---
+
+### 25.2. Verificación de health checks
+
+Comandos:
+
+```bash
+curl -i http://localhost:9200
+curl -i http://localhost:9201
+curl -i http://localhost:9202
+```
+
+Captura esperada:
+
+```text
+HTTP/1.1 200 OK
+OK - Master is writable
+OK - Slave replication healthy. Lag=0
+```
+
+---
+
+### 25.3. Verificación de replicación
+
+Comando:
+
+```bash
+./scripts/verify-replication.sh
+```
+
+Captura esperada:
+
+```text
+Replica_IO_Running: Yes
+Replica_SQL_Running: Yes
+Seconds_Behind_Source: 0
+Auto_Position: 1
+```
+
+---
+
+### 25.4. Separación de tráfico
+
+Comando:
+
+```bash
+./scripts/test-haproxy-balancing.sh
+```
+
+Debe evidenciar:
+
+- Escritura por `3307`.
+- Lectura por `3308`.
+- Lecturas distribuidas entre esclavos.
+
+---
+
+### 25.5. Caída de un esclavo
+
+Comandos:
+
+```bash
+docker compose stop mysql-slave1
+curl -s -u admin:admin123 "http://localhost:8080/stats;csv" | grep mysql-slave1
+```
+
+Luego:
+
+```bash
+docker compose start mysql-slave1
+curl -s -u admin:admin123 "http://localhost:8080/stats;csv" | grep mysql-slave1
+```
+
+Debe evidenciar:
+
+- `mysql-slave1 DOWN` al detener el contenedor.
+- `mysql-slave1 UP` al levantarlo nuevamente.
+
+---
+
+### 25.6. Benchmark Sysbench read-only
+
+Comando:
+
+```bash
+./scripts/sysbench-read.sh
+```
+
+Guardar:
+
+- TPS
+- latencia promedio
+- número de consultas
+- duración de la prueba
+
+---
+
+### 25.7. Benchmark Sysbench read/write
+
+Comando:
+
+```bash
+./scripts/sysbench-write.sh
+```
+
+Guardar:
+
+- TPS
+- latencia promedio
+- número de transacciones
+- duración de la prueba
+
+---
+
+## 26. Tabla de resultados Sysbench
+
+Completar después de ejecutar las pruebas:
+
+| Prueba | Puerto | Modo | Hilos | Duración | TPS | Latencia promedio |
+|---|---:|---|---:|---:|---:|---:|
+| Lectura | 3308 | read-only | 8 | 60 s | Pendiente | Pendiente |
+| Escritura | 3307 | read/write | 8 | 60 s | Pendiente | Pendiente |
+
+---
+
+## 27. Comandos útiles
+
+### Ver logs del maestro
+
+```bash
+docker logs mysql-master --tail=80
+```
+
+### Ver logs del esclavo 1
+
+```bash
+docker logs mysql-slave1 --tail=80
+```
+
+### Ver logs del esclavo 2
+
+```bash
+docker logs mysql-slave2 --tail=80
+```
+
+### Ver logs de HAProxy
+
+```bash
+docker logs haproxy --tail=80
+```
+
+### Entrar al contenedor HAProxy
+
+```bash
+docker exec -it haproxy sh
+```
+
+### Entrar al maestro MySQL
+
+```bash
+docker exec -it mysql-master mysql -uroot -p
+```
+
+### Entrar al esclavo 1
+
+```bash
+docker exec -it mysql-slave1 mysql -uroot -p
+```
+
+### Entrar al esclavo 2
+
+```bash
+docker exec -it mysql-slave2 mysql -uroot -p
+```
+
+---
+
+## 28. Limpieza completa del entorno
+
+Para borrar contenedores, red y volúmenes:
+
+```bash
+docker compose down -v
+```
+
+Para reconstruir todo desde cero:
+
+```bash
+docker compose build --no-cache
+docker compose up -d
+```
+
+---
+
+## 29. Checklist final de entrega
+
+Antes de entregar, verificar:
+
+- [ ] Docker Compose levanta todos los servicios.
+- [ ] MySQL maestro está activo.
+- [ ] MySQL esclavo 1 está activo.
+- [ ] MySQL esclavo 2 está activo.
+- [ ] Replicación GTID funciona en ambos esclavos.
+- [ ] `Replica_IO_Running = Yes`.
+- [ ] `Replica_SQL_Running = Yes`.
+- [ ] `Seconds_Behind_Source = 0`.
+- [ ] Health check del maestro responde `HTTP 200 OK`.
+- [ ] Health check del esclavo 1 responde `HTTP 200 OK`.
+- [ ] Health check del esclavo 2 responde `HTTP 200 OK`.
+- [ ] HAProxy muestra todos los backends en `UP`.
+- [ ] Escrituras funcionan por puerto `3307`.
+- [ ] Lecturas funcionan por puerto `3308`.
+- [ ] Se demuestra caída y recuperación de un esclavo.
+- [ ] Sysbench read-only se ejecuta con 8 hilos durante 60 segundos.
+- [ ] Sysbench read/write se ejecuta con 8 hilos durante 60 segundos.
+- [ ] Se agregan capturas del dashboard.
+- [ ] Se agregan resultados de benchmarks.
+
+---
+
+## 30. Conclusión
+
+El proyecto implementa una solución de balanceo de carga para bases de datos MySQL usando HAProxy en modo TCP. La arquitectura separa correctamente el tráfico de escritura y lectura, utilizando un nodo maestro para escrituras y dos esclavos para lecturas.
+
+La replicación basada en GTID permite mantener sincronizados los esclavos con el maestro. Los health checks personalizados con xinetd permiten que HAProxy detecte automáticamente si un nodo está activo, si el maestro está disponible para escritura y si los esclavos mantienen la replicación saludable.
+
+Finalmente, el dashboard de HAProxy y las pruebas con Sysbench permiten validar el estado del sistema, la tolerancia a fallos y el rendimiento de la arquitectura.
