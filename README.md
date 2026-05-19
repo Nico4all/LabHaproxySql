@@ -899,131 +899,7 @@ docker exec -it mysql-slave2 mysql -uroot -p
 
 ---
 
-## 28. Solución de problemas comunes
-
-### Problema: HAProxy muestra backends DOWN
-
-Verificar primero los health checks:
-
-```bash
-curl -i http://localhost:9200
-curl -i http://localhost:9201
-curl -i http://localhost:9202
-```
-
-Luego verificar desde el contenedor HAProxy:
-
-```bash
-docker exec -it haproxy sh
-wget -S -O- http://mysql-master:9200
-wget -S -O- http://mysql-slave1:9200
-wget -S -O- http://mysql-slave2:9200
-exit
-```
-
-Si responden `200 OK`, el problema está en la configuración de HAProxy.
-
-Usar `tcp-check` en lugar de `httpchk`:
-
-```cfg
-option tcp-check
-tcp-check connect port 9200
-tcp-check send GET\ /\ HTTP/1.0\r\n\r\n
-tcp-check expect string OK
-```
-
----
-
-### Problema: xinetd no responde
-
-Revisar si xinetd está corriendo:
-
-```bash
-docker exec -it mysql-master ps aux | grep xinetd
-docker exec -it mysql-slave1 ps aux | grep xinetd
-docker exec -it mysql-slave2 ps aux | grep xinetd
-```
-
-Verificar el archivo de configuración:
-
-```bash
-docker exec -it mysql-master cat /etc/xinetd.d/mysqlchk
-```
-
----
-
-### Problema: conflicto de puertos 9200
-
-No publicar los tres contenedores con el mismo puerto en el host.
-
-Incorrecto:
-
-```yaml
-ports:
-  - "9200:9200"
-```
-
-repetido en los tres servicios.
-
-Correcto:
-
-```yaml
-mysql-master:
-  ports:
-    - "9200:9200"
-
-mysql-slave1:
-  ports:
-    - "9201:9200"
-
-mysql-slave2:
-  ports:
-    - "9202:9200"
-```
-
-Dentro de HAProxy sí se usa `9200` para todos porque cada contenedor tiene IP propia.
-
----
-
-### Problema: replicación no inicia
-
-Revisar estado:
-
-```bash
-docker exec -it mysql-slave1 mysql -uroot -p -e "SHOW REPLICA STATUS\G"
-docker exec -it mysql-slave2 mysql -uroot -p -e "SHOW REPLICA STATUS\G"
-```
-
-Validar que aparezca:
-
-```text
-Replica_IO_Running: Yes
-Replica_SQL_Running: Yes
-```
-
-Si aparece error de usuario o contraseña, revisar `.env` y el usuario `replicator` en el maestro.
-
----
-
-### Problema: Sysbench no conecta
-
-Verificar que HAProxy esté activo:
-
-```bash
-docker compose ps
-curl -s -u admin:admin123 "http://localhost:8080/stats;csv" | grep mysql
-```
-
-Probar conexión manual:
-
-```bash
-docker exec -it sysbench mysql -hhaproxy -P3307 -uappuser -papppass123 testdb -e "SELECT 1;"
-docker exec -it sysbench mysql -hhaproxy -P3308 -uappuser -papppass123 testdb -e "SELECT 1;"
-```
-
----
-
-## 29. Limpieza completa del entorno
+## 28. Limpieza completa del entorno
 
 Para borrar contenedores, red y volúmenes:
 
@@ -1040,7 +916,7 @@ docker compose up -d
 
 ---
 
-## 30. Checklist final de entrega
+## 29. Checklist final de entrega
 
 Antes de entregar, verificar:
 
@@ -1066,7 +942,7 @@ Antes de entregar, verificar:
 
 ---
 
-## 31. Conclusión
+## 30. Conclusión
 
 El proyecto implementa una solución de balanceo de carga para bases de datos MySQL usando HAProxy en modo TCP. La arquitectura separa correctamente el tráfico de escritura y lectura, utilizando un nodo maestro para escrituras y dos esclavos para lecturas.
 
