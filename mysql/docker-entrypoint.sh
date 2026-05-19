@@ -26,7 +26,7 @@ fi
 # Función para iniciar el servidor xinetd de health check en background
 start_health_server() {
     echo "Iniciando xinetd para health checks..."
-    xinetd -dontfork &
+    xinetd -stayalive -pidfile /var/run/xinetd.pid &
     XINETD_PID=$!
     echo "xinetd iniciado con PID: $XINETD_PID"
 }
@@ -111,13 +111,13 @@ EOSQL
     echo "Usuario de replicación creado."
 fi
 
-# Iniciar xinetd para health checks
-start_health_server
-
 # Configurar replicación si es esclavo
 if [ "$ROLE" != "master" ]; then
     configure_replication
 fi
+
+# Iniciar xinetd para health checks
+start_health_server
 
 echo "========================================="
 echo "Inicialización completa. MySQL está corriendo."

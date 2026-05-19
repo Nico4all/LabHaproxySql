@@ -2,7 +2,6 @@ service mysqlchk
 {
     type            = UNLISTED
     disable         = no
-    flags           = REUSE
     socket_type     = stream
     protocol        = tcp
     port            = 9200
@@ -10,6 +9,6 @@ service mysqlchk
     user            = root
     server          = /usr/local/bin/healthcheck.sh
     log_on_failure  += USERID
-    only_from       = 0.0.0.0/0
     per_source      = UNLIMITED
+    cps             = 100 2
 }
