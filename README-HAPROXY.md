@@ -231,6 +231,117 @@ mysql -h127.0.0.1 -P3308 -uroot -prootpass123 -e "
 SELECT * FROM testdb.users;
 "
 ```
+## Benchmarking con Sysbench
+
+### Instalación
+
+```bash
+# Dentro de vagrant ssh
+sudo apt-get update && sudo apt-get install -y sysbench
+```
+
+### Ejecución Rápida
+
+```bash
+# Dar permisos a los scripts
+chmod +x /vagrant/scripts/benchmark-suite.sh
+chmod +x /vagrant/scripts/generate-benchmark-report.py
+
+# Ejecutar suite completo
+./scripts/benchmark-suite.sh
+```
+
+⏱️ **Duración:** ~15-20 minutos
+
+### ¿Qué hace el script?
+
+1.  Prepara base de datos de prueba (1M registros)
+2.  Ejecuta benchmarks READ-ONLY (puerto 3308 - esclavos)
+3.  Ejecuta benchmarks READ-WRITE (puerto 3307 - maestro)
+4.  Ejecuta benchmarks WRITE-ONLY (puerto 3307 - maestro)
+5.  Genera reporte HTML con gráficas comparativas
+
+### Ver Resultados
+
+Los reportes se guardan en:
+
+/vagrant/benchmarks/reports/benchmark_YYYYMMDD_HHMMSS.html
+
+Ábrelo desde Windows en tu navegador para ver:
+- Gráfica comparativa de TPS (Transacciones Por Segundo)
+- Tabla detallada de resultados
+- Comparación por número de threads (1, 4, 8, 16)
+
+### Resultados Esperados
+
+| Test | Puerto | TPS Esperado |
+|------|--------|--------------|
+| Read-Only | 3308 (Esclavos) | 800-1200 |
+| Read-Write | 3307 (Maestro) | 300-500 |
+| Write-Only | 3307 (Maestro) | 200-400 |
+
+**Conclusión:** Los esclavos manejan ~3x más lecturas que el maestro escrituras, demostrando el beneficio de la separación de carga.
+
+### De forma Manual para run-sysbench-benchmarks.sh
+
+# Crear usuario (SIN -t)
+docker exec -i mysql-master mysql -uroot -prootpass123 << EOF
+CREATE USER IF NOT EXISTS 'sbtest'@'%' IDENTIFIED WITH mysql_native_password BY 'sbtest123';
+GRANT ALL PRIVILEGES ON sbtest.* TO 'sbtest'@'%';
+GRANT ALL PRIVILEGES ON testdb.* TO 'sbtest'@'%';
+FLUSH PRIVILEGES;
+EOF
+
+# Verificar que se creó
+docker exec -it mysql-master mysql -uroot -prootpass123 -e "
+SELECT user, host, plugin FROM mysql.user WHERE user='sbtest';"
+
+# Verificar desde HAProxy
+mysql -h192.168.56.10 -P3307 -usbtest -psbtest123 -e "
+SELECT 'Conexión exitosa' AS status;"
+
+Deberías ver:
++--------+------+-----------------------+
+| user   | host | plugin                |
++--------+------+-----------------------+
+| sbtest | %    | mysql_native_password |
++--------+------+-----------------------+
+
++-------------------+
+| status            |
++-------------------+
+| Conexión exitosa  |
++-------------------+
+
+# Crear base de datos
+mysql -h192.168.56.10 -P3307 -usbtest -psbtest123 -e "
+CREATE DATABASE IF NOT EXISTS sbtest;"
+
+# Preparar datos de prueba
+sysbench /usr/share/sysbench/oltp_read_write.lua \
+  --mysql-host=192.168.56.10 \
+  --mysql-port=3307 \
+  --mysql-user=sbtest \
+  --mysql-password=sbtest123 \
+  --mysql-db=sbtest \
+  --tables=10 \
+  --table-size=100000 \
+  prepare
+
+# Test READ-ONLY
+sysbench /usr/share/sysbench/oltp_read_only.lua \
+  --mysql-host=192.168.56.10 \
+  --mysql-port=3308 \
+  --mysql-user=sbtest \
+  --mysql-password=sbtest123 \
+  --mysql-db=sbtest \
+  --tables=10 \
+  --table-size=100000 \
+  --threads=8 \
+  --time=60 \
+  --report-interval=10 \
+  run
+
 
 ## 🔍 Monitoreo
 
