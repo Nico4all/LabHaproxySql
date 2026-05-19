@@ -1,0 +1,7 @@
+Resumen Sysbench
+
+READ-ONLY:
+    transactions:                        32077  (534.09 per sec.)
+
+READ/WRITE:
+    transactions:                        1954   (32.51 per sec.)

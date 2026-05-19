@@ -1,0 +1,16 @@
+======================================
+Verificando Health Checks HTTP
+======================================
+
+--- MySQL Master (Puerto 9200) ---
+✗ Health Check: ERROR (HTTP 000 o sin respuesta)
+
+--- MySQL Slave 1 (Puerto 9201) ---
+✗ Health Check: ERROR (HTTP 000 o sin respuesta)
+
+--- MySQL Slave 2 (Puerto 9202) ---
+✗ Health Check: ERROR (HTTP 000 o sin respuesta)
+
+======================================
+Verificación completada
+======================================

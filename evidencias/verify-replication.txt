@@ -1,0 +1,25 @@
+======================================
+Verificando Estado de Replicación MySQL
+======================================
+
+--- MySQL Master ---
+Host: mysql-master:3306
+✗ No se pudo conectar
+
+--------------------------------------
+
+--- MySQL Slave 1 ---
+Host: mysql-slave1:3316
+✗ No se pudo conectar
+
+--------------------------------------
+
+--- MySQL Slave 2 ---
+Host: mysql-slave2:3326
+✗ No se pudo conectar
+
+--------------------------------------
+
+======================================
+Verificación completada
+======================================

@@ -1,0 +1,30 @@
+======================================
+Verificando Estado de HAProxy
+======================================
+
+--- Estado del Contenedor ---
+[0;32m✓[0m HAProxy está corriendo
+
+--- Frontends HAProxy ---
+Frontend Escritura (mysql_write):
+  [0;32m✓[0m Puerto 3307 abierto
+
+Frontend Lectura (mysql_read):
+  [0;32m✓[0m Puerto 3308 abierto
+
+Dashboard Estadísticas:
+  [0;32m✓[0m Puerto 8080 abierto
+  [1;33m→[0m Accede a: http://localhost:8080/stats
+  [1;33m→[0m Usuario: admin / Contraseña: admin123
+
+--- Estado de Backends ---
+Backend: mysql_master_backend
+  [0;32m✓[0m mysql-master: UP
+
+Backend: mysql_slaves_backend
+  [0;32m✓[0m mysql-slave1: UP
+  [0;32m✓[0m mysql-slave2: UP
+
+======================================
+Verificación completada
+======================================

@@ -1,0 +1,5 @@
+NAME           IMAGE                  COMMAND                  SERVICE        CREATED             STATUS                       PORTS
+haproxy        haproxy:2.8-alpine     "docker-entrypoint.s…"   haproxy        41 minutes ago      Up 41 minutes (unhealthy)    0.0.0.0:3307-3308->3307-3308/tcp, :::3307-3308->3307-3308/tcp, 0.0.0.0:8080->8080/tcp, :::8080->8080/tcp
+mysql-master   vagrant-mysql-master   "/usr/local/bin/cust…"   mysql-master   About an hour ago   Up About an hour (healthy)   0.0.0.0:3306->3306/tcp, :::3306->3306/tcp, 0.0.0.0:9200->9200/tcp, :::9200->9200/tcp, 33060/tcp
+mysql-slave1   vagrant-mysql-slave1   "/usr/local/bin/cust…"   mysql-slave1   About an hour ago   Up 11 minutes (healthy)      33060/tcp, 0.0.0.0:3316->3306/tcp, :::3316->3306/tcp, 0.0.0.0:9201->9200/tcp, :::9201->9200/tcp
+mysql-slave2   vagrant-mysql-slave2   "/usr/local/bin/cust…"   mysql-slave2   55 minutes ago      Up 55 minutes (healthy)      33060/tcp, 0.0.0.0:3326->3306/tcp, :::3326->3306/tcp, 0.0.0.0:9202->9200/tcp, :::9202->9200/tcp
